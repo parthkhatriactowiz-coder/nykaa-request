@@ -5,11 +5,6 @@ import requests
 
 base_url = "https://www.nykaa.com/"
 API_URL = "https://www.nykaa.com/app-api/index.php/products/list"
-
-# Copy the full headers dict (incl. Cookie) from your get-page.py here.
-# NOTE: cookies/csrf-token/bm_sz/_abck are session-bound and expire —
-# if you start getting empty/blocked responses, grab fresh ones from
-# your browser's Network tab and paste them in again.
 HEADERS = {
     "accept": "application/json, text/plain, */*",
     "accept-language": "en-US,en;q=0.9",
@@ -37,25 +32,8 @@ def fetch_page(category_id, page_no, session):
     params = {"category_id": category_id, "page_no": page_no}
     resp = session.get(API_URL, params=params, headers=HEADERS, timeout=20)
     resp.raise_for_status()
-    return resp.json()
-
-
-def find_first(data, keys):
-    """Recursively search a nested dict/list for the first matching key."""
-    if isinstance(data, dict):
-        for k in keys:
-            if k in data:
-                return data[k]
-        for v in data.values():
-            result = find_first(v, keys)
-            if result is not None:
-                return result
-    elif isinstance(data, list):
-        for item in data:
-            result = find_first(item, keys)
-            if result is not None:
-                return result
-    return None
+    payload = resp.json()
+    return payload.get("response", payload)
 
 
 def extract_pagination_info(data):
@@ -65,39 +43,39 @@ def extract_pagination_info(data):
 
 
 def extract_raw_products(data):
-    return find_first(data, ["products"]) or []
+    return data.get("products") or []
 
 
 def parse_products(product_data):
     products = []
     for product in product_data or []:
         try:
-            sale = product.get("cohortSaleTemplate") or {}
+            sale = product.get("cohort_sale_template") or {}
             products.append(
                 {
-                    "product_id": product.get("productId", ""),
+                    "id": product.get("id", ""),
                     "sku": product.get("sku", ""),
                     "slug": base_url + product.get("slug", ""),
-                    "product_name": product.get("productTitle", ""),
-                    "brand_name": product.get("brandName", ""),
-                    "price": product.get("price", 0),
-                    "original_price": product.get("mrp", 0),
-                    "offer": product.get("offer", ""),
-                    "image_url": product.get("imageUrl", ""),
-                    "in_stock": product.get("inStock", False),
+                    "product_name": product.get("product_title", ""),
+                    "brand_name": product.get("brand_name", ""),
+                    "price": product.get("final_price", 0),
+                    "original_price": product.get("price", 0),
+                    "offer": product.get("offer_message", ""),
+                    "image_url": product.get("image_url", ""),
+                    "in_stock": product.get("is_saleable", False),
                     "rating": product.get("rating", 0),
-                    "rating_count": product.get("ratingCount", 0),
+                    "rating_count": product.get("rating_count", 0),
                     "quantity": product.get("quantity", 0),
                     "discount": product.get("discount", 0),
                     "new_tags": [
-                        tag.get("title", "") for tag in (product.get("newTags") or [])
+                        tag.get("title", "") for tag in (product.get("pdt_tags") or [])
                     ],
                     "sale": {
                         "sale_price": sale.get("price", 0),
                         "text": sale.get("text", ""),
-                        "sale_discount": sale.get("discount", 0),
+                        "sale_discount": sale.get("sub_heading", 0),
                     },
-                    "most_reordered": bool(product.get("secondaryTag")),
+                    "most_reordered": bool(product.get("secondary_tags")),
                 }
             )
         except Exception:
@@ -115,21 +93,16 @@ def scrape_category(category_id, output_dir):
     total_found, product_count = extract_pagination_info(first_page)
 
     if not total_found or not product_count:
-        print("⚠️  Could not auto-detect totalFound/count.")
-        print("Top-level keys in response:", list(first_page.keys()))
-        print("Paste that structure back to me and I'll wire up the exact field names.")
         return
 
-    total_pages = -(-total_found // product_count)  
-    print(
-        f"total_found={total_found}, product_count={product_count}, total_pages={total_pages}\n"
-    )
+    total_pages = -(-total_found // product_count)
+
 
     all_products.extend(parse_products(extract_raw_products(first_page)))
     print(f"  Page 1/{total_pages}: {len(all_products)} product(s) so far")
 
     for page_no in range(2, total_pages + 1):
-        time.sleep(1)  
+        time.sleep(1)
         page_data = fetch_page(category_id, page_no, session)
         page_products = parse_products(extract_raw_products(page_data))
         all_products.extend(page_products)
